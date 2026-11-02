@@ -86,10 +86,25 @@ Ranged and Duelist form clean classes.
     penalties for matchup variance and bad worst cases (≈ blindability).
   - *Counter score*: best matchups weighted by how often those opponents are
     played — surfaces niche picks that punish popular blinds.
-  Piggyback on Machine LoLing's blindability work: watch "The math behind
-  champion blindability" (2026-10-30, video-only post) and align definitions
-  so results are comparable, then extend with the counter score.
-  https://machineloling.com/2026/10/30/the-math-behind-champion-blindability/
+  Piggyback on Machine LoLing's blindability work. Their Champion Pool Designer
+  (https://pooldesigner.machineloling.com) is what the blindability video
+  (https://machineloling.com/2026/10/30/the-math-behind-champion-blindability/)
+  is based on. What the tool page states (formula itself not published):
+  - Blindability = an aggregate z-score of how consistently a champion performs
+    across opponents *and partners* (so it includes synergy, not just lane
+    matchups); "polarized" champions score low. Shared z-scale across the tool.
+  - Matchup/synergy Δs: Diamond+, patches 16.1–16.4, WR-corrected (champion's
+    overall WR removed). Opponent/partner pick-rate floor 0.5%; optional
+    pick-rate weighting. Playrates from a later patch across Silver–Master+.
+  - No separate counter metric — their matchup Δ plays that role. So our
+    *counter score* (playrate-weighted best matchups) is a genuine extension.
+  - Individual Champ Compare reports Pearson similarity of Δ vectors (matchup,
+    synergy, total) plus Blind Δz — useful for validating our archetypes.
+  To do: watch the video for the exact formula and match it; compare our blind
+  score against their Blind Δz on shared champions as a sanity check.
+  Data access: the UI runs on a live API but there's no documented export.
+  Read their "Terms and data license" page before pulling any numbers from it;
+  otherwise compute our own Δs from collected matches (same recipe as above).
   Their data says Ahri (mid) is very blindable; in top essentially only Gnar
   is — his kit covers two axes (mini outranges melee, mega survives all-ins), so
   his counters beat him on both (Jayce, Vayne/Tristana top, Sylas).
