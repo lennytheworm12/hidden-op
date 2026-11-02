@@ -60,6 +60,52 @@ jungle Nidalee) can't be fully captured from data; for those the model should sa
   become separate "picks" (items are already stored).
 - Draft-position / counterpick split if obtainable.
 
+**v2 — role-aware modeling (top lane is different)**
+
+Working hypothesis: top lane is more matchup-specific than other roles. Melee
+tops must enter the enemy's threat range to farm, so every last hit is a trade,
+and matchups hinge on several cross-cutting traits (true/%HP damage, sustain,
+range, all-in power, tankiness, wave clear). Marksmen and mages differ on fewer
+of these, so skills transfer (Caitlyn → Jinx). Machine LoLing's class
+encyclopedia (below) found the same thing from data: support/ADC/mid cluster
+cleanly, but top tanks and fighters correlate with mixed groups and only
+Ranged and Duelist form clean classes.
+
+- **Archetypes from Machine LoLing.** Use their Season 16 per-role classes
+  (matchup + synergy delta profiles, WR-corrected, empirical-Bayes shrunk,
+  correlation + Ward/SNN clustering) for support, ADC, mid, jungle. For top,
+  don't force classes — lean on champion-specific estimates.
+  https://machineloling.com/2026/04/13/the-definitive-season-16-champion-class-encyclopedia/
+- **Role-specific priors.** Looser champion×role offset (and weaker
+  archetype×role pooling) for TOP. Pick the SDs per role by held-out
+  log-likelihood across patches.
+- **Blind score vs counter score** (top first, then all roles). A single WR
+  blends blind and counter contexts — e.g. Vayne top is coinflippy blind but
+  strong into Gnar/Jayce. Report per champion:
+  - *Blind score*: opponent-playrate-weighted mean matchup delta, minus
+    penalties for matchup variance and bad worst cases (≈ blindability).
+  - *Counter score*: best matchups weighted by how often those opponents are
+    played — surfaces niche picks that punish popular blinds.
+  Piggyback on Machine LoLing's blindability work: watch "The math behind
+  champion blindability" (2026-10-30, video-only post) and align definitions
+  so results are comparable, then extend with the counter score.
+  https://machineloling.com/2026/10/30/the-math-behind-champion-blindability/
+  Their data says Ahri (mid) is very blindable; in top essentially only Gnar
+  is — his kit covers two axes (mini outranges melee, mega survives all-ins), so
+  his counters beat him on both (Jayce, Vayne/Tristana top, Sylas).
+- **Tests of the hypothesis** (good blog material: "why top lane breaks clustering"):
+  1. Matchup variance by role — spread of shrunk champ-vs-champ deltas should be
+     widest in top if top is more matchup-dependent.
+  2. Hand-drawn groups (juggernauts: Darius/Mordekaiser/Garen vs skirmishers:
+     Riven/Fiora) — is within-group matchup correlation clearly higher than
+     between-group? If yes, the categories exist and clustering method/noise is
+     the problem.
+  3. Factor model (matrix factorization on matchup deltas) per role: how many
+     dimensions does each role need? If top needs more and the axes are
+     interpretable (anti-tank, extended fighter, ranged bully), that supports
+     "top laners are mixtures of traits, not members of one class" — and the
+     factor weights replace hard archetype tags as model input.
+
 **v3 — richer identity**
 - Matchup interactions (archetype × enemy-archetype in lane).
 - Learned embeddings (matrix factorization on matchup outcomes) vs hand tags.
