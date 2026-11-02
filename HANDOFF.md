@@ -16,18 +16,23 @@ jungle Nidalee) can't be fully captured from data; for those the model should sa
   a playrate-inflated decoy is not, adjusted WR tracks ground truth far better than
   raw WR (r≈0.89 vs 0.41), flagged picks are ≥80% truly positive, the playrate
   bias is recovered, unseen combos get wide intervals, the backtest runs.
-- **Not yet run against the real Riot API.** The collector was written blind —
-  the build environment couldn't reach riotgames.com. Expect small fixes.
+- **Smoke-tested against the real Riot API (2026-11-02, na1, patch 16.21):**
+  league-v4 entries include `puuid` (Challenger and Diamond/Emerald pages), match-v5
+  `championName` values all matched Data Dragon ids, `teamPosition` was populated
+  for every participant, and the collector ran end-to-end with no code fixes.
+- **Rank brackets:** the crawl now covers Master+, Diamond and Emerald by default
+  (`--tiers`), round-robin across tiers with a per-player cap (`--per-player`) so
+  the 10k-player Master ladder doesn't drown out lower brackets. Off-meta builds
+  often surface below Master. Each match is tagged with the seed player's tier;
+  fit one bracket at a time with `run_model.py --tiers EMERALD` etc.
+- Cloud sessions need `*.api.riotgames.com` and `ddragon.leagueoflegends.com`
+  allowed in the environment's network settings, and `RIOT_API_KEY` set there.
 
 ## First steps on a real machine
 
 1. `cp .env.example .env`, add a dev key from developer.riotgames.com
    (expires every 24h — regenerate daily, or register a personal key).
-2. Smoke-test the client: `seed_players` then one `match()` call. Check:
-   - league entries include `puuid` (they should in current league-v4; if not,
-     resolve via summoner-v4).
-   - `championName` values match Data Dragon ids (`MonkeyKing` for Wukong, etc.).
-   - `teamPosition` is populated (empty string for remakes/odd games is filtered).
+2. ~~Smoke-test the client~~ — done, all checks passed (see Status).
 3. Run the collector per platform in parallel (limits are per routing value):
    `na1`, `euw1`, `kr`. ~100 req / 2 min each ⇒ ~70k req/day/platform.
 4. After ~1 patch of data: `python scripts/run_model.py` and sanity-check the
@@ -47,6 +52,11 @@ jungle Nidalee) can't be fully captured from data; for those the model should sa
   The tight offset prior is what lets Sylas BOTTOM borrow from Sylas + Mage-in-bot.
 - **Raw match JSON is stored compressed** so new features (timelines aside) can
   be extracted without re-spending API budget.
+- **Rank = seed player's tier, fit per bracket.** Match-v5 has no rank field, so a
+  match is labelled by the tier of the player we found it through (the other 9
+  are usually nearby). Brackets are fit separately because baseline winrates and
+  playrate bias differ by rank. A pooled model with a champ×role×bracket offset
+  (strength in Emerald informs Master, with shrinkage) is the natural v2 upgrade.
 - **Archetypes = Data Dragon primary tag** for v1. Coarse but objective. Override
   via `data/archetypes_override.csv`.
 

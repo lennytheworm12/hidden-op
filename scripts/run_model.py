@@ -1,6 +1,7 @@
 """Fit the model on collected data and write the ranked table.
 
     python scripts/run_model.py --db data/hiddenop.db --patches 3 --out results/scores.csv
+    python scripts/run_model.py --tiers EMERALD    # one rank bracket (MASTER+ = Chall/GM/Master)
     python scripts/run_model.py --synthetic        # no API key needed
 
 Extra off-role combos to score even with zero games:
@@ -26,6 +27,8 @@ def main():
     ap.add_argument("--max-playrate", type=float, default=0.01)
     ap.add_argument("--score-pair", action="append", default=[], help="Champion:ROLE")
     ap.add_argument("--out", default="results/scores.csv")
+    ap.add_argument("--tiers", default=None,
+                    help="fit on matches from these tiers only, e.g. EMERALD or MASTER+,DIAMOND")
     ap.add_argument("--synthetic", action="store_true")
     args = ap.parse_args()
 
@@ -36,7 +39,9 @@ def main():
     else:
         from hiddenop.archetypes import load_archetypes
         from hiddenop.collector.storage import connect
-        df = champ_role_table(connect(args.db))
+        from hiddenop.collector.collect import parse_tiers
+        tiers = parse_tiers(args.tiers) if args.tiers else None
+        df = champ_role_table(connect(args.db), tiers=tiers)
         keep = sorted(df.patch.unique(), key=patch_key)[-args.patches:]
         df = df[df.patch.isin(keep)]
         arch = load_archetypes()

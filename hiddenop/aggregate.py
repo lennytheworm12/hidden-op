@@ -12,14 +12,21 @@ import pandas as pd
 ROLES = ["TOP", "JUNGLE", "MIDDLE", "BOTTOM", "UTILITY"]
 
 
-def champ_role_table(con: sqlite3.Connection, min_patch: str | None = None) -> pd.DataFrame:
-    q = """
+def champ_role_table(con: sqlite3.Connection, min_patch: str | None = None,
+                     tiers: list[str] | None = None) -> pd.DataFrame:
+    """tiers: keep only matches found through players of these tiers (e.g. ['EMERALD']).
+    Playrate is then computed within that bracket, so fit one bracket at a time."""
+    where, params = "p.role != ''", []
+    if tiers:
+        where += f" AND m.tier IN ({','.join('?' * len(tiers))})"
+        params = list(tiers)
+    q = f"""
         SELECT p.champion, p.role, m.patch, COUNT(*) AS games, SUM(p.win) AS wins
         FROM participants p JOIN matches m USING (match_id)
-        WHERE p.role != ''
+        WHERE {where}
         GROUP BY p.champion, p.role, m.patch
     """
-    df = pd.read_sql_query(q, con)
+    df = pd.read_sql_query(q, con, params=params)
     if min_patch:
         df = df[df.patch.map(patch_key) >= patch_key(min_patch)]
     return add_playrate(df)

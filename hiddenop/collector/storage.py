@@ -23,7 +23,8 @@ CREATE TABLE IF NOT EXISTS matches (
     patch TEXT NOT NULL,          -- e.g. '16.21'
     game_start INTEGER,           -- ms epoch
     duration_s INTEGER,
-    raw BLOB                      -- zlib(json)
+    raw BLOB,                     -- zlib(json)
+    tier TEXT                     -- tier of the seed player the match was found through
 );
 CREATE TABLE IF NOT EXISTS participants (
     match_id TEXT NOT NULL,
@@ -48,6 +49,9 @@ def connect(path: str | Path = "data/hiddenop.db") -> sqlite3.Connection:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
     con = sqlite3.connect(path)
     con.executescript(SCHEMA)
+    cols = {r[1] for r in con.execute("PRAGMA table_info(matches)")}
+    if "tier" not in cols:  # DBs created before tier tagging
+        con.execute("ALTER TABLE matches ADD COLUMN tier TEXT")
     return con
 
 
@@ -56,13 +60,14 @@ def patch_of(game_version: str) -> str:
     return f"{major}.{minor}"
 
 
-def store_match(con: sqlite3.Connection, platform: str, m: dict) -> None:
+def store_match(con: sqlite3.Connection, platform: str, m: dict, tier: str | None = None) -> None:
     info = m["info"]
     mid = m["metadata"]["matchId"]
     con.execute(
-        "INSERT OR IGNORE INTO matches VALUES (?,?,?,?,?,?)",
+        "INSERT OR IGNORE INTO matches(match_id, platform, patch, game_start, duration_s, raw, tier)"
+        " VALUES (?,?,?,?,?,?,?)",
         (mid, platform, patch_of(info["gameVersion"]), info.get("gameStartTimestamp"),
-         info.get("gameDuration"), zlib.compress(json.dumps(m).encode())),
+         info.get("gameDuration"), zlib.compress(json.dumps(m).encode()), tier),
     )
     rows = []
     for p in info["participants"]:

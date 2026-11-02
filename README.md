@@ -26,7 +26,8 @@ python scripts/run_model.py --synthetic       # end-to-end demo, no API key
 
 cp .env.example .env                          # add your Riot dev key
 export $(cat .env | xargs)
-python -m hiddenop.collector.collect --platform na1 --days 14
+python -m hiddenop.collector.collect --platform na1 --days 14   # Master+, Diamond, Emerald
+python scripts/run_model.py --tiers EMERALD                      # fit one rank bracket
 python scripts/run_model.py --score-pair Sylas:BOTTOM --score-pair Nidalee:UTILITY
 ```
 
@@ -34,7 +35,7 @@ python scripts/run_model.py --score-pair Sylas:BOTTOM --score-pair Nidalee:UTILI
 
 | Path | What |
 |---|---|
-| `hiddenop/collector/` | Rate-limited Riot API client, Master+/Diamond I crawler, SQLite storage |
+| `hiddenop/collector/` | Rate-limited Riot API client, Master+/Diamond/Emerald crawler (tier-tagged), SQLite storage |
 | `hiddenop/aggregate.py` | Participants → champion × role × patch table |
 | `hiddenop/archetypes.py` | Champion → archetype (Data Dragon tags + CSV overrides) |
 | `hiddenop/model.py` | Hierarchical logistic model, MAP + Laplace intervals |
