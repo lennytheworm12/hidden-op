@@ -45,7 +45,7 @@ interval sits entirely above 50% and its playrate is under 1%.
 
 - **Code:** working v1 on branch **`elo-brackets`** (not yet merged into `main`;
   `main` lacks the rank-bracket changes). Use that branch.
-- **Tests:** `python -m pytest` passes 8 checks: one collector check with a fake
+- **Tests:** `python -m pytest` passes 11 checks: three raw-archive checks with a fake rclone, one collector check with a fake
   client, and 7 on a simulated world: a planted
   hidden pick is flagged, a playrate-inflated decoy isn't, adjusted WR tracks
   ground truth far better than raw WR (r≈0.89 vs 0.41), ≥80% of flagged picks are
@@ -64,10 +64,14 @@ interval sits entirely above 50% and its playrate is under 1%.
 
 ## Where to run things
 
-- **Collector: run on the owner's PC**, not in a Claude cloud session. Cloud
-  containers get wiped when idle, background commands stop after 2 hours, and the
-  database (~1 GB/day per region) is too big for git. On a PC it can run for
-  days, and it resumes where it left off because progress is saved in the DB.
+- **Collector: runs 24/7 on a free cloud VM** (Oracle Always Free ARM; Google
+  e2-micro as fallback), set up by `deploy/setup.sh` with systemd services that
+  restart on crash/reboot. Step-by-step guide for the owner (Windows):
+  `deploy/SERVER.md`. Raw match JSON is shipped to Google Drive every 3 h in
+  verified chunks (`scripts/archive_raw.py`) and dropped locally; a slim DB
+  snapshot goes to `My Drive/hidden-op/hiddenop-slim.db` daily. Not in a Claude
+  cloud session: those get wiped when idle and stop background jobs after 2 h.
+  The PC instructions below still work for local runs.
 - **Code changes and analysis:** any Claude Code session (cloud or local). Push
   code to GitHub, pull on the PC.
 - Cloud sessions that need the API must allow the Riot hosts
@@ -83,7 +87,7 @@ On the owner's Windows PC, in PowerShell:
 git clone https://github.com/lennytheworm12/hidden-op; cd hidden-op
 git checkout elo-brackets
 pip install -r requirements.txt
-python -m pytest                     # 8 checks, no key needed
+python -m pytest                     # 11 checks, no key needed
 # Save the key to .env (gitignored). It prompts, so the key never lands in shell history.
 $k = Read-Host "Riot API key"; Set-Content .env "RIOT_API_KEY=$k"
 powercfg /change standby-timeout-ac 0   # stop the PC sleeping while plugged in
@@ -169,9 +173,12 @@ Throughput: ~100 requests / 2 min per region ⇒ roughly 70k matches/day/region.
 | `hiddenop/simulate.py` | Synthetic world with planted hidden and decoy picks (for tests) |
 | `scripts/run_model.py` | Fit on the DB and write `results/scores.csv` |
 | `scripts/snapshot_db.py` | Consistent copy of the DB to another folder (e.g. Drive); `--slim` drops raw JSON |
+| `scripts/archive_raw.py` | Ships raw JSON to Drive in chunks via rclone, verifies MD5, then frees it locally |
+| `deploy/` | Server setup script, systemd units, archive/snapshot/status scripts, `SERVER.md` guide |
 | `scripts/db_status.py` | Progress report on the collected data (safe while collecting) |
 | `tests/test_model_recovery.py` | The 7 synthetic checks |
 | `tests/test_collector.py` | Collector check with a fake client |
+| `tests/test_archive.py` | Archive upload/verify/prune and crash recovery with a fake rclone |
 
 ## Design decisions
 

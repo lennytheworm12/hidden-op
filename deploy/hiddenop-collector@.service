@@ -1,0 +1,20 @@
+# One collector per region: hiddenop-collector@na1, @euw1, @kr.
+# setup.sh fills in @USER@ and @DIR@ and installs this to /etc/systemd/system/.
+[Unit]
+Description=hidden-op collector (%i)
+After=network-online.target
+Wants=network-online.target
+# Never give up restarting (e.g. after a long Riot outage).
+StartLimitIntervalSec=0
+
+[Service]
+User=@USER@
+WorkingDirectory=@DIR@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@DIR@/.venv/bin/python -m hiddenop.collector.collect --platform %i --days 14 --loop --max-matches 1000000000
+Restart=always
+RestartSec=60
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

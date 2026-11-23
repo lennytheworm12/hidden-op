@@ -1,0 +1,10 @@
+[Unit]
+Description=hidden-op: daily slim DB snapshot to Google Drive
+
+[Timer]
+OnCalendar=*-*-* 09:00:00 UTC
+Persistent=true
+RandomizedDelaySec=15min
+
+[Install]
+WantedBy=timers.target

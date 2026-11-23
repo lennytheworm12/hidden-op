@@ -1,0 +1,14 @@
+# Uploads a slim copy of the DB (everything the model needs) to Google Drive. Started by hiddenop-snapshot.timer.
+[Unit]
+Description=hidden-op: upload slim DB snapshot to Google Drive
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@DIR@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@DIR@/deploy/snapshot.sh
+Nice=10
+IOSchedulingClass=idle
