@@ -105,6 +105,20 @@ so a long run doesn't die on one bad request. A rejected key (401/403) stops it.
 
 Disk: about 1 GB/day per region, so ~40 GB for two weeks of three regions.
 
+**Keep the live DB on a local disk, not in a Google Drive/OneDrive folder.**
+Three processes writing SQLite inside a syncing folder risks locks and
+corruption, and Drive would keep re-uploading a growing multi-GB file. Back up
+to Drive with snapshots instead (safe while collecting):
+
+```powershell
+python scripts/snapshot_db.py --out "G:/My Drive/hidden-op" --slim   # model data only, small
+python scripts/snapshot_db.py --out "G:/My Drive/hidden-op"          # full, incl. raw JSON
+```
+
+The slim snapshot drops the raw match JSON and is what a cloud session needs to
+run the model. Free Drive is 15 GB, so the full copy needs a paid plan or another
+backup drive.
+
 After roughly one patch of data:
 
 ```bash
@@ -149,6 +163,7 @@ Throughput: ~100 requests / 2 min per region ⇒ roughly 70k matches/day/region.
 | `hiddenop/backtest.py` | Walk-forward: do flagged picks keep winning next patch? |
 | `hiddenop/simulate.py` | Synthetic world with planted hidden and decoy picks (for tests) |
 | `scripts/run_model.py` | Fit on the DB and write `results/scores.csv` |
+| `scripts/snapshot_db.py` | Consistent copy of the DB to another folder (e.g. Drive); `--slim` drops raw JSON |
 | `scripts/db_status.py` | Progress report on the collected data (safe while collecting) |
 | `tests/test_model_recovery.py` | The 7 synthetic checks |
 | `tests/test_collector.py` | Collector check with a fake client |
