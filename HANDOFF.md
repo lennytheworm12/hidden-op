@@ -93,6 +93,9 @@ python -m hiddenop.collector.collect --platform na1  --days 14 --loop --max-matc
 python -m hiddenop.collector.collect --platform euw1 --days 14 --loop --max-matches 2000000
 python -m hiddenop.collector.collect --platform kr   --days 14 --loop --max-matches 2000000
 
+# Or start all three in their own windows with one command:
+powershell -ExecutionPolicy Bypass -File scripts\start_collectors.ps1
+
 # Any time, from a fourth terminal:
 python scripts/db_status.py          # matches per region/tier/patch, DB size
 ```
@@ -103,6 +106,13 @@ in the DB; add `--skip-seed` to skip re-fetching ladders). With `--loop` it keep
 doing passes over the ladder, re-seeds daily, and sleeps 30 min when a pass finds
 nothing new. Network drops and Riot 5xx are retried with backoff, then skipped,
 so a long run doesn't die on one bad request. A rejected key (401/403) stops it.
+
+**Shutdowns and crashes are safe.** Each match is committed on its own, so a
+kill or power cut loses at most the match in flight; SQLite rolls back the
+partial write, and the next run skips stored matches and continues with players
+not yet crawled. (Tested by killing a crawl 3 times mid-run: integrity check ok,
+no duplicates, no gaps.) To restart automatically after a reboot, register
+`scripts/start_collectors.ps1` to run at logon (command at the top of that file).
 
 Disk: about 1 GB/day per region, so ~40 GB for two weeks of three regions.
 
