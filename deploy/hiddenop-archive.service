@@ -1,0 +1,14 @@
+# Ships raw match JSON to Google Drive and frees it locally. Started by hiddenop-archive.timer.
+[Unit]
+Description=hidden-op: archive raw match JSON to Google Drive
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=@USER@
+WorkingDirectory=@DIR@
+Environment=PYTHONUNBUFFERED=1
+ExecStart=@DIR@/deploy/archive.sh
+Nice=10
+IOSchedulingClass=idle

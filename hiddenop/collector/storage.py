@@ -24,7 +24,8 @@ CREATE TABLE IF NOT EXISTS matches (
     game_start INTEGER,           -- ms epoch
     duration_s INTEGER,
     raw BLOB,                     -- zlib(json)
-    tier TEXT                     -- tier of the seed player the match was found through
+    tier TEXT,                    -- tier of the seed player the match was found through
+    archive TEXT                  -- set when raw was moved to an archive chunk (raw is then NULL)
 );
 CREATE TABLE IF NOT EXISTS participants (
     match_id TEXT NOT NULL,
@@ -57,6 +58,8 @@ def connect(path: str | Path = "data/hiddenop.db") -> sqlite3.Connection:
     cols = {r[1] for r in con.execute("PRAGMA table_info(matches)")}
     if "tier" not in cols:  # DBs created before tier tagging
         con.execute("ALTER TABLE matches ADD COLUMN tier TEXT")
+    if "archive" not in cols:  # DBs created before raw archiving
+        con.execute("ALTER TABLE matches ADD COLUMN archive TEXT")
     return con
 
 

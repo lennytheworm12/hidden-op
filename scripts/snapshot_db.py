@@ -7,6 +7,7 @@ folder now and then. Safe to run while collectors are running.
     python scripts/snapshot_db.py           # full copy to Google Drive/hidden-op
     python scripts/snapshot_db.py --slim    # also write a small copy without raw JSON
     python scripts/snapshot_db.py --out D:/backups
+    python scripts/snapshot_db.py --slim-only --out data/snapshots   # server: slim copy only
 
 Where it goes, in order: --out, BACKUP_DIR in the environment or .env, then
 the Google Drive for Desktop folder found automatically, plus "hidden-op".
@@ -54,6 +55,8 @@ def main():
     ap.add_argument("--out", default=None, help="folder to write into (default: Google Drive/hidden-op)")
     ap.add_argument("--slim", action="store_true",
                     help="also write hiddenop-slim.db without raw match JSON (small, for cloud sessions)")
+    ap.add_argument("--slim-only", action="store_true",
+                    help="write only hiddenop-slim.db (servers whose raw JSON is archived separately)")
     args = ap.parse_args()
 
     src_path = Path(args.db)
@@ -61,8 +64,9 @@ def main():
         sys.exit(f"No database at {src_path}")
     out_dir = backup_dir(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
-    snapshot(src_path, out_dir / "hiddenop.db", slim=False)
-    if args.slim:
+    if not args.slim_only:
+        snapshot(src_path, out_dir / "hiddenop.db", slim=False)
+    if args.slim or args.slim_only:
         snapshot(src_path, out_dir / "hiddenop-slim.db", slim=True)
 
 
