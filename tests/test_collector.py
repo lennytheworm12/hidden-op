@@ -36,3 +36,21 @@ def test_crawl_skips_failures_and_dedupes(tmp_path):
     other = connect(tmp_path / "t.db")
     other.execute("INSERT INTO players(puuid, platform, tier) VALUES ('c','kr','DIAMOND')")
     other.commit()
+
+
+class FakeLadder:
+    def apex_league(self, platform, tier):
+        return {"entries": [{"puuid": "x", "leaguePoints": 812, "wins": 120, "losses": 90}]}
+
+    def league_entries(self, platform, tier, div, page):
+        if div != "I" or page > 1:
+            return []
+        return [{"puuid": "y", "rank": "I", "leaguePoints": 55, "wins": 30, "losses": 25}]
+
+
+def test_seed_keeps_ladder_snapshot(tmp_path):
+    con = connect(tmp_path / "t.db")
+    assert collect.seed_players(FakeLadder(), con, "na1", ["MASTER", "EMERALD"], 1) == 2
+    rows = dict((r[0], r[1:]) for r in con.execute(
+        "SELECT puuid, tier, division, lp, wins, losses FROM ladder_snapshots"))
+    assert rows == {"x": ("MASTER", "", 812, 120, 90), "y": ("EMERALD", "I", 55, 30, 25)}

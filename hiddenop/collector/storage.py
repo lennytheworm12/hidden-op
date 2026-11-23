@@ -41,6 +41,19 @@ CREATE TABLE IF NOT EXISTS participants (
     deaths INTEGER,
     PRIMARY KEY (match_id, puuid)
 );
+-- Ladder state of seeded players each time the ladder is fetched (daily with --loop).
+-- Rank/LP/games-played at a point in time can't be fetched again later.
+CREATE TABLE IF NOT EXISTS ladder_snapshots (
+    puuid TEXT NOT NULL,
+    platform TEXT NOT NULL,
+    taken_at INTEGER NOT NULL,    -- s epoch
+    tier TEXT,
+    division TEXT,                -- I-IV ('' for apex tiers)
+    lp INTEGER,
+    wins INTEGER,
+    losses INTEGER,
+    PRIMARY KEY (puuid, taken_at)
+);
 CREATE INDEX IF NOT EXISTS ix_part_champ_role ON participants(champion, role);
 """
 

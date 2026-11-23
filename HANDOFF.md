@@ -158,11 +158,19 @@ Throughput: ~100 requests / 2 min per region ⇒ roughly 70k matches/day/region.
 - `participants`: one row per player per match with champion, role
   (`teamPosition`), win, **final items** (6 slots + trinket), damage to
   champions, healing and shielding on allies, and deaths.
+- `ladder_snapshots`: every time the ladder is seeded (daily with `--loop`),
+  each seeded player's tier, division, LP, wins and losses, timestamped. This is
+  the only record of rank at game time, which can't be fetched later. Join on
+  `participants.puuid` to rank most of the other nine players in a match too.
 - Everything else in the match JSON (runes, summoner spells, gold, CS, vision,
   KDA, ...) is in the raw blob and can be extracted later without new API calls.
 - **Not collected:** build order and skill order. Those need the timeline
   endpoint, which costs one extra call per match (it would halve throughput).
-  Final items are enough to detect build variants like blue Ezreal.
+  Final items are enough to detect build variants like blue Ezreal. Timelines
+  can still be fetched later for chosen matches (e.g. only rare picks), as long
+  as Riot still serves those matches.
+- **Not collected:** champion mastery per player. Fetch later for candidate
+  picks only (next step 4); mastery only grows, so a later read is close enough.
 
 ## Code map
 

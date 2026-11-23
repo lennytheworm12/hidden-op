@@ -41,6 +41,12 @@ def _add(con, entries, platform: str, tier: str) -> int:
     if entries and not rows:
         log.warning("%s %s: entries have no puuid field; league-v4 may have changed", platform, tier)
     con.executemany("INSERT OR IGNORE INTO players(puuid, platform, tier) VALUES (?,?,?)", rows)
+    now = int(time.time())
+    con.executemany(
+        "INSERT OR IGNORE INTO ladder_snapshots VALUES (?,?,?,?,?,?,?,?)",
+        [(e["puuid"], platform, now, tier, "" if tier in APEX else e.get("rank", ""),
+          e.get("leaguePoints"), e.get("wins"), e.get("losses"))
+         for e in entries if e.get("puuid")])
     return len(rows)
 
 
