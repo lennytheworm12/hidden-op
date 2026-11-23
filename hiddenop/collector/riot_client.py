@@ -50,12 +50,13 @@ class GaveUp(RuntimeError):
     """A request kept failing (network or 5xx). The caller can skip it and move on."""
 
 
-def _key_from_dotenv(path: Path = Path(".env")) -> str | None:
-    """Read RIOT_API_KEY from a .env file so each terminal doesn't need it exported."""
+def dotenv_value(name: str, path: Path = Path(".env")) -> str | None:
+    """Read NAME=value from a .env file (so each terminal doesn't need it exported)."""
     try:
-        for line in path.read_text().splitlines():
+        # utf-8-sig: Windows PowerShell may write a byte-order mark.
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
             k, sep, v = line.strip().partition("=")
-            if sep and k.strip() == "RIOT_API_KEY":
+            if sep and k.strip() == name:
                 return v.strip().strip('"').strip("'") or None
     except OSError:
         pass
@@ -64,7 +65,7 @@ def _key_from_dotenv(path: Path = Path(".env")) -> str | None:
 
 class RiotClient:
     def __init__(self, api_key: str | None = None, limits=DEFAULT_LIMITS, timeout=10):
-        self.api_key = api_key or os.environ.get("RIOT_API_KEY") or _key_from_dotenv()
+        self.api_key = api_key or os.environ.get("RIOT_API_KEY") or dotenv_value("RIOT_API_KEY")
         if not self.api_key:
             raise RuntimeError("Set RIOT_API_KEY or put it in .env (see .env.example)")
         self.session = requests.Session()

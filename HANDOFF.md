@@ -84,7 +84,8 @@ git clone https://github.com/lennytheworm12/hidden-op; cd hidden-op
 git checkout elo-brackets
 pip install -r requirements.txt
 python -m pytest                     # 8 checks, no key needed
-copy .env.example .env               # then put the real key in .env (gitignored)
+# Save the key to .env (gitignored). It prompts, so the key never lands in shell history.
+$k = Read-Host "Riot API key"; Set-Content .env "RIOT_API_KEY=$k"
 powercfg /change standby-timeout-ac 0   # stop the PC sleeping while plugged in
 
 # One terminal per region, all in the hidden-op folder. They share one DB safely.
@@ -105,19 +106,23 @@ so a long run doesn't die on one bad request. A rejected key (401/403) stops it.
 
 Disk: about 1 GB/day per region, so ~40 GB for two weeks of three regions.
 
-**Keep the live DB on a local disk, not in a Google Drive/OneDrive folder.**
-Three processes writing SQLite inside a syncing folder risks locks and
-corruption, and Drive would keep re-uploading a growing multi-GB file. Back up
-to Drive with snapshots instead (safe while collecting):
+**Storage: live DB local, backups on Google Drive.** Keep `data/hiddenop.db` on
+the PC's own disk, not in a Drive/OneDrive folder: three processes writing SQLite
+inside a syncing folder risks locks and corruption, and Drive would keep
+re-uploading a growing multi-GB file. Google Drive (owner has 2 TB) is the default
+backup target: `snapshot_db.py` finds the Google Drive for Desktop folder and
+writes a consistent copy to `My Drive/hidden-op/`, safe while collecting.
 
 ```powershell
-python scripts/snapshot_db.py --out "G:/My Drive/hidden-op" --slim   # model data only, small
-python scripts/snapshot_db.py --out "G:/My Drive/hidden-op"          # full, incl. raw JSON
+python scripts/snapshot_db.py --slim   # full hiddenop.db + small hiddenop-slim.db (no raw JSON)
+
+# Run it automatically every day at 4 AM (from the hidden-op folder):
+$a = New-ScheduledTaskAction -Execute (Get-Command python).Source -Argument "scripts\snapshot_db.py --slim" -WorkingDirectory (Get-Location).Path
+Register-ScheduledTask -TaskName "hidden-op backup" -Action $a -Trigger (New-ScheduledTaskTrigger -Daily -At 4am)
 ```
 
-The slim snapshot drops the raw match JSON and is what a cloud session needs to
-run the model. Free Drive is 15 GB, so the full copy needs a paid plan or another
-backup drive.
+Override the location with `--out FOLDER` or `BACKUP_DIR=...` in `.env`. The slim
+copy has everything the model needs and is what a cloud session should download.
 
 After roughly one patch of data:
 
