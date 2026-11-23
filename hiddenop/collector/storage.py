@@ -47,7 +47,12 @@ CREATE INDEX IF NOT EXISTS ix_part_champ_role ON participants(champion, role);
 
 def connect(path: str | Path = "data/hiddenop.db") -> sqlite3.Connection:
     Path(path).parent.mkdir(parents=True, exist_ok=True)
-    con = sqlite3.connect(path)
+    # Several collectors (one per region) share this file. WAL lets readers and a
+    # writer coexist, and the long timeout makes writers wait their turn instead
+    # of crashing with "database is locked".
+    con = sqlite3.connect(path, timeout=120)
+    con.execute("PRAGMA journal_mode=WAL")
+    con.execute("PRAGMA synchronous=NORMAL")
     con.executescript(SCHEMA)
     cols = {r[1] for r in con.execute("PRAGMA table_info(matches)")}
     if "tier" not in cols:  # DBs created before tier tagging

@@ -5,11 +5,15 @@ Personal/dev keys: 20 req / 1 s and 100 req / 120 s, enforced per routing value
 """
 from __future__ import annotations
 
+import logging
 import os
 import time
 from collections import deque
+from pathlib import Path
 
 import requests
+
+log = logging.getLogger("riot")
 
 PLATFORM_TO_REGION = {
     "na1": "americas", "br1": "americas", "la1": "americas", "la2": "americas",
@@ -42,23 +46,45 @@ class RateLimiter:
             time.sleep(wait + 0.01)
 
 
+class GaveUp(RuntimeError):
+    """A request kept failing (network or 5xx). The caller can skip it and move on."""
+
+
+def _key_from_dotenv(path: Path = Path(".env")) -> str | None:
+    """Read RIOT_API_KEY from a .env file so each terminal doesn't need it exported."""
+    try:
+        for line in path.read_text().splitlines():
+            k, sep, v = line.strip().partition("=")
+            if sep and k.strip() == "RIOT_API_KEY":
+                return v.strip().strip('"').strip("'") or None
+    except OSError:
+        pass
+    return None
+
+
 class RiotClient:
     def __init__(self, api_key: str | None = None, limits=DEFAULT_LIMITS, timeout=10):
-        self.api_key = api_key or os.environ.get("RIOT_API_KEY")
+        self.api_key = api_key or os.environ.get("RIOT_API_KEY") or _key_from_dotenv()
         if not self.api_key:
-            raise RuntimeError("Set RIOT_API_KEY (see .env.example)")
+            raise RuntimeError("Set RIOT_API_KEY or put it in .env (see .env.example)")
         self.session = requests.Session()
         self.session.headers["X-Riot-Token"] = self.api_key
         self.limits = limits
         self.timeout = timeout
         self._limiters: dict[str, RateLimiter] = {}
 
-    def _get(self, host: str, path: str, params=None, max_retries=5):
+    def _get(self, host: str, path: str, params=None, max_retries=8):
         limiter = self._limiters.setdefault(host, RateLimiter(self.limits))
         url = f"https://{host}.api.riotgames.com{path}"
         for attempt in range(max_retries):
             limiter.acquire()
-            r = self.session.get(url, params=params, timeout=self.timeout)
+            backoff = min(2 ** attempt, 300)
+            try:
+                r = self.session.get(url, params=params, timeout=self.timeout)
+            except requests.RequestException as e:  # Wi-Fi drop, DNS blip, timeout
+                log.warning("network error on %s (%s); retrying in %ds", host, e.__class__.__name__, backoff)
+                time.sleep(backoff)
+                continue
             if r.status_code == 200:
                 return r.json()
             if r.status_code == 404:
@@ -67,10 +93,13 @@ class RiotClient:
                 time.sleep(float(r.headers.get("Retry-After", 5)))
                 continue
             if r.status_code >= 500:
-                time.sleep(2 ** attempt)
+                log.warning("HTTP %d from %s; retrying in %ds", r.status_code, host, backoff)
+                time.sleep(backoff)
                 continue
+            if r.status_code in (401, 403):
+                raise RuntimeError(f"HTTP {r.status_code}: API key rejected or expired. Check RIOT_API_KEY.")
             r.raise_for_status()
-        raise RuntimeError(f"Gave up on {url} after {max_retries} attempts")
+        raise GaveUp(f"Gave up on {url} after {max_retries} attempts")
 
     # --- league-v4 (platform routing) ---
     def apex_league(self, platform: str, tier: str, queue="RANKED_SOLO_5x5"):

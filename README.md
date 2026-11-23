@@ -24,9 +24,9 @@ pip install -r requirements.txt
 python -m pytest                              # model checks on synthetic data
 python scripts/run_model.py --synthetic       # end-to-end demo, no API key
 
-cp .env.example .env                          # add your Riot dev key
-export $(cat .env | xargs)
-python -m hiddenop.collector.collect --platform na1 --days 14   # Master+, Diamond, Emerald
+cp .env.example .env                          # add your Riot key (read automatically)
+python -m hiddenop.collector.collect --platform na1 --days 14 --loop   # Master+, Diamond, Emerald
+python scripts/db_status.py                   # progress
 python scripts/run_model.py --tiers EMERALD                      # fit one rank bracket
 python scripts/run_model.py --score-pair Sylas:BOTTOM --score-pair Nidalee:UTILITY
 ```

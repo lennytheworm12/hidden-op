@@ -17,7 +17,7 @@ import argparse
 import logging
 import time
 
-from .riot_client import RiotClient
+from .riot_client import GaveUp, RiotClient
 from .storage import connect, known_match, store_match
 
 log = logging.getLogger("collect")
@@ -63,7 +63,8 @@ def seed_players(client: RiotClient, con, platform: str, tiers: list[str],
 
 
 def crawl(client: RiotClient, con, platform: str, days: int, max_matches: int,
-          per_player: int = 10) -> None:
+          per_player: int = 10) -> int:
+    """One pass over this platform's players. Returns the number of new matches."""
     start_time = int(time.time()) - days * 86400
     got = 0
     # Round-robin across tiers: least-recently-crawled first, interleaved by tier.
@@ -74,22 +75,34 @@ def crawl(client: RiotClient, con, platform: str, days: int, max_matches: int,
                FROM players WHERE platform=?)
            ORDER BY k, tier""", (platform,)
     ).fetchall()
+    log.info("%s: crawling %d players", platform, len(players))
     for puuid, tier in players:
-        for mid in client.match_ids(platform, puuid, start_time=start_time, count=per_player):
+        try:
+            ids = client.match_ids(platform, puuid, start_time=start_time, count=per_player)
+        except GaveUp as e:
+            log.warning("skipping player: %s", e)
+            continue
+        for mid in ids:
             if known_match(con, mid):
                 continue
-            m = client.match(platform, mid)
+            try:
+                m = client.match(platform, mid)
+            except GaveUp as e:
+                log.warning("skipping match: %s", e)
+                continue
             if m and m.get("info", {}).get("queueId") == 420:
                 store_match(con, platform, m, tier=tier)
+                # Commit per match: other regions' collectors share the DB, and a
+                # long-open write transaction would block them.
+                con.commit()
                 got += 1
                 if got % 100 == 0:
-                    con.commit()
                     log.info("%s: %d new matches", platform, got)
                 if got >= max_matches:
-                    con.commit()
-                    return
+                    return got
         con.execute("UPDATE players SET last_crawled=? WHERE puuid=?", (int(time.time()), puuid))
-    con.commit()
+        con.commit()
+    return got
 
 
 def main():
@@ -105,15 +118,30 @@ def main():
     ap.add_argument("--per-player", type=int, default=10,
                     help="recent match IDs to take per player per pass (keeps tiers balanced)")
     ap.add_argument("--skip-seed", action="store_true")
+    ap.add_argument("--loop", action="store_true",
+                    help="keep crawling pass after pass (re-seeding daily) until --max-matches or Ctrl+C")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     client = RiotClient()
     con = connect(args.db)
-    if not args.skip_seed:
-        log.info("seeded %d players", seed_players(client, con, args.platform,
-                                                         parse_tiers(args.tiers), args.pages_per_division))
-    crawl(client, con, args.platform, args.days, args.max_matches, args.per_player)
+    tiers = parse_tiers(args.tiers)
+    seeded_at = 0.0
+    total = 0
+    while True:
+        # Ladders change, so a long --loop run re-seeds once a day.
+        if not args.skip_seed and time.time() - seeded_at > 86400:
+            log.info("seeded %d players", seed_players(client, con, args.platform, tiers,
+                                                     args.pages_per_division))
+            seeded_at = time.time()
+        got = crawl(client, con, args.platform, args.days, args.max_matches - total, args.per_player)
+        total += got
+        log.info("%s: pass done, %d new matches (%d this run)", args.platform, got, total)
+        if not args.loop or total >= args.max_matches:
+            break
+        if got == 0:
+            log.info("nothing new; sleeping 30 min")
+            time.sleep(1800)
 
 
 if __name__ == "__main__":
