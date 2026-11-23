@@ -30,6 +30,16 @@ class RateLimiter:
         # Run slightly under the limit so clock skew doesn't trigger 429s.
         self.windows = [(max(1, int(n * safety)), secs, deque()) for n, secs in limits]
 
+    def has_capacity(self) -> bool:
+        """True if a request could go out right now without waiting."""
+        now = time.monotonic()
+        for n, secs, hist in self.windows:
+            while hist and now - hist[0] >= secs:
+                hist.popleft()
+            if len(hist) >= n:
+                return False
+        return True
+
     def acquire(self) -> None:
         while True:
             now = time.monotonic()
@@ -102,6 +112,9 @@ class RiotClient:
             r.raise_for_status()
         raise GaveUp(f"Gave up on {url} after {max_retries} attempts")
 
+    def has_capacity(self, host: str) -> bool:
+        return self._limiters.setdefault(host, RateLimiter(self.limits)).has_capacity()
+
     # --- league-v4 (platform routing) ---
     def apex_league(self, platform: str, tier: str, queue="RANKED_SOLO_5x5"):
         """tier in {'challenger','grandmaster','master'}"""
@@ -126,7 +139,15 @@ class RiotClient:
         region = PLATFORM_TO_REGION[platform]
         return self._get(region, f"/lol/match/v5/matches/{match_id}")
 
-    # --- champion-mastery-v4 (platform routing) — for the v2 one-trick correction ---
+    def timeline(self, platform: str, match_id: str):
+        region = PLATFORM_TO_REGION[platform]
+        return self._get(region, f"/lol/match/v5/matches/{match_id}/timeline")
+
+    # --- champion-mastery-v4 (platform routing) — for the one-trick correction ---
+    def mastery_all(self, platform: str, puuid: str):
+        """Every champion's mastery for one player, in one call."""
+        return self._get(platform, f"/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}")
+
     def mastery(self, platform: str, puuid: str, champion_id: int):
         return self._get(
             platform,

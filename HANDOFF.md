@@ -66,7 +66,7 @@ interval sits entirely above 50% and its playrate is under 1%.
 
 - **Collector: run on the owner's PC**, not in a Claude cloud session. Cloud
   containers get wiped when idle, background commands stop after 2 hours, and the
-  database (~1 GB/day per region) is too big for git. On a PC it can run for
+  database (~0.75 GB/day per region) is too big for git. On a PC it can run for
   days, and it resumes where it left off because progress is saved in the DB.
 - **Code changes and analysis:** any Claude Code session (cloud or local). Push
   code to GitHub, pull on the PC.
@@ -114,7 +114,7 @@ not yet crawled. (Tested by killing a crawl 3 times mid-run: integrity check ok,
 no duplicates, no gaps.) To restart automatically after a reboot, register
 `scripts/start_collectors.ps1` to run at logon (command at the top of that file).
 
-Disk: about 1 GB/day per region, so ~40 GB for two weeks of three regions.
+Disk: about 0.75 GB/day per region, so ~32 GB for two weeks of three regions.
 
 **Storage: live DB local, backups on Google Drive.** Keep `data/hiddenop.db` on
 the PC's own disk, not in a Drive/OneDrive folder: three processes writing SQLite
@@ -148,7 +148,8 @@ Useful collector options: `--tiers` (default `MASTER+,DIAMOND,EMERALD`; e.g. add
 `--per-player` (match IDs per player per pass, default 10, keeps brackets
 balanced), `--max-matches`, `--db` (default `data/hiddenop.db`).
 
-Throughput: ~100 requests / 2 min per region ⇒ roughly 70k matches/day/region.
+Throughput: ~100 requests / 2 min per region ⇒ roughly 30k matches/day/region with
+timelines (2 calls per match), 70k with `--no-timelines`.
 
 ## What data is stored (SQLite, `data/hiddenop.db`)
 
@@ -162,15 +163,22 @@ Throughput: ~100 requests / 2 min per region ⇒ roughly 70k matches/day/region.
   each seeded player's tier, division, LP, wins and losses, timestamped. This is
   the only record of rank at game time, which can't be fetched later. Join on
   `participants.puuid` to rank most of the other nine players in a match too.
+- `timelines`: per player per match, **build order** (every buy/sell/undo with
+  its time), **skill order** (e.g. `QEWQQRQ...`), and gold/CS/XP at 10 and 15
+  minutes. Extracted from the timeline endpoint; the ~1 MB raw timeline isn't kept.
+  If a timeline fetch fails the match is still kept (backfill later).
+- `mastery`: each player's mastery on every champion (points, level, last
+  played), one compressed snapshot per lookup, refreshed after 7 days. Players
+  are queued in `mastery_todo` when seen in a match and fetched newest first, only
+  when the platform API is idle, so it never slows match collection. Coverage is
+  partial: ~70k lookups/day/region vs more new players than that. Read with
+  `storage.mastery_of(con, puuid, champion_id)`.
 - Everything else in the match JSON (runes, summoner spells, gold, CS, vision,
   KDA, ...) is in the raw blob and can be extracted later without new API calls.
-- **Not collected:** build order and skill order. Those need the timeline
-  endpoint, which costs one extra call per match (it would halve throughput).
-  Final items are enough to detect build variants like blue Ezreal. Timelines
-  can still be fetched later for chosen matches (e.g. only rare picks), as long
-  as Riot still serves those matches.
-- **Not collected:** champion mastery per player. Fetch later for candidate
-  picks only (next step 4); mastery only grows, so a later read is close enough.
+
+Cost: timelines are one extra call per match, so collection is ~30k
+matches/day/region (was ~70k). Turn off with `--no-timelines` / `--no-mastery`.
+Disk ~0.75 GB/day/region, ~32 GB for two weeks of three regions.
 
 ## Code map
 
@@ -219,8 +227,8 @@ Throughput: ~100 requests / 2 min per region ⇒ roughly 70k matches/day/region.
    against game knowledge. Expect to tune `--max-playrate` and the minimum games.
 3. **Build splitting:** cluster final item sets per champion so AP vs AD Shaco,
    or blue vs standard Ezreal, become separate "picks". The data is already stored.
-4. **One-trick/mastery correction:** for low-playrate candidates, pull
-   champion-mastery-v4 for their players and compare at matched experience
+4. **One-trick/mastery correction:** mastery is now collected as data comes in
+   (`mastery` table); for low-playrate candidates, top up any missing players and compare at matched experience
    (winrate delta = result minus the player's own baseline).
 5. **Pooled ranks:** one model with a champion×role×bracket offset, so strength
    seen in Emerald informs Master with shrinkage, instead of fully separate fits.

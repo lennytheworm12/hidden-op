@@ -38,6 +38,16 @@ def main():
     for patch, n in con.execute("SELECT patch, COUNT(*) FROM matches GROUP BY 1 ORDER BY 1"):
         print(f"  {patch:6} {n:,}")
 
+    def count(sql):
+        try:
+            return con.execute(sql).fetchone()[0] or 0
+        except sqlite3.OperationalError:  # table not there in older DBs
+            return 0
+    tl = count("SELECT COUNT(DISTINCT match_id) FROM timelines")
+    print(f"\nMatches with build/skill order: {tl:,} of {total:,}")
+    print(f"Players with mastery: {count('SELECT COUNT(DISTINCT puuid) FROM mastery'):,}"
+          f" (waiting: {count('SELECT COUNT(*) FROM mastery_todo'):,})")
+
     seen, players = con.execute(
         "SELECT SUM(last_crawled > 0), COUNT(*) FROM players").fetchone()
     print(f"\nPlayers crawled this pass or earlier: {seen or 0:,} of {players:,}")
