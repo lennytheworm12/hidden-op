@@ -1,90 +1,190 @@
 # Handoff: hidden-op
 
-Context for whoever (or whichever Claude Code session) picks this up next.
+Read this first if you're a new person or Claude Code session picking up the
+project. It covers what the project is, where it stands, and what to do next.
 
-## Goal
+## What this project is
 
-Quantify "hidden OP" picks: champion-role combos with high true strength and low
-playrate, using winrate, playrate, archetype, and whatever else the data supports.
-It's expected that some picks (e.g. Nidalee support, whose identity differs from
-jungle Nidalee) can't be fully captured from data; for those the model should say
-"uncertain", not guess.
+**hidden-op finds League of Legends picks that are strong but rarely played**:
+champion + role combos (and eventually champion + build) whose true strength is
+high while their playrate is low. Examples of the kind of pick it's hunting for:
+Singed mid, Vel'Koz support, AP Shaco jungle, off-role bot laners like Seraphine
+or Swain before they went mainstream, and build discoveries like "blue Ezreal".
 
-## Status (v1 scaffold, built and tested on synthetic data only)
+**Why raw winrate doesn't work:** rare picks have tiny samples, so their winrate
+is mostly noise. They are also played mainly by one-tricks, which inflates their
+numbers. A 58% winrate over 40 games tells you almost nothing.
 
-- `pytest` passes 7 checks on a simulated world: planted hidden pick is flagged,
-  a playrate-inflated decoy is not, adjusted WR tracks ground truth far better than
-  raw WR (r≈0.89 vs 0.41), flagged picks are ≥80% truly positive, the playrate
-  bias is recovered, unseen combos get wide intervals, the backtest runs.
-- **Smoke-tested against the real Riot API (2026-11-02, na1, patch 16.21):**
-  league-v4 entries include `puuid` (Challenger and Diamond/Emerald pages), match-v5
-  `championName` values all matched Data Dragon ids, `teamPosition` was populated
-  for every participant, and the collector ran end-to-end with no code fixes.
-- **Rank brackets:** the crawl now covers Master+, Diamond and Emerald by default
-  (`--tiers`), round-robin across tiers with a per-player cap (`--per-player`) so
-  the 10k-player Master ladder doesn't drown out lower brackets. Off-meta builds
-  often surface below Master. Each match is tagged with the seed player's tier;
-  fit one bracket at a time with `run_model.py --tiers EMERALD` etc.
-- Cloud sessions need `*.api.riotgames.com` and `ddragon.leagueoflegends.com`
-  allowed in the environment's network settings, and `RIOT_API_KEY` set there.
+**The approach:** a partially pooled (hierarchical) logistic model. Each
+champion-role estimate borrows strength from the champion's other roles and from
+its archetype in that role, and a playrate term absorbs the one-trick bias:
 
-## First steps on a real machine
+```
+logit P(win) = role + champion + archetype×role + champion×role offset + β·log(playrate)
+```
 
-1. `cp .env.example .env`, add a dev key from developer.riotgames.com
-   (expires every 24h — regenerate daily, or register a personal key).
-2. ~~Smoke-test the client~~ — done, all checks passed (see Status).
-3. Run the collector per platform in parallel (limits are per routing value):
-   `na1`, `euw1`, `kr`. ~100 req / 2 min each ⇒ ~70k req/day/platform.
-4. After ~1 patch of data: `python scripts/run_model.py` and sanity-check the
-   top of the table against your game knowledge.
+The pick's "true strength" is the predicted winrate with the playrate term set to
+the role's typical level (`adj_wr`). A pick is flagged **hidden OP** when its 90%
+interval sits entirely above 50% and its playrate is under 1%.
+
+## Main goals
+
+1. **Rank hidden-OP candidates** from real ranked data, with honest uncertainty.
+   When the data can't support a call (e.g. support Nidalee plays nothing like
+   jungle Nidalee), the model should say "uncertain" rather than guess.
+2. **Look below Master.** Niche builds and off-role picks are often found by
+   lower-elo players (Emerald/Diamond) before high elo adopts them. Collect
+   several rank brackets and compare.
+3. **Prove it works:** a backtest showing the model would have flagged a known
+   breakout pick *before* it went mainstream, plus a before/after table of naive
+   top-10 by raw winrate vs model top-10.
+4. **Share it:** once there's a real backtest number, write it up and contact
+   Machine LoLing (see Outreach).
+
+## Current status (as of 2026-11-23)
+
+- **Code:** working v1 on branch **`elo-brackets`** (not yet merged into `main`;
+  `main` lacks the rank-bracket changes). Use that branch.
+- **Tests:** `python -m pytest` passes 7 checks on a simulated world: a planted
+  hidden pick is flagged, a playrate-inflated decoy isn't, adjusted WR tracks
+  ground truth far better than raw WR (r≈0.89 vs 0.41), ≥80% of flagged picks are
+  truly positive, the playrate bias is recovered, unseen combos get wide
+  intervals, and the backtest runs.
+- **Real API smoke test passed (2026-11-02, na1, patch 16.21):** league entries
+  include `puuid`, every `championName` matched Data Dragon ids, `teamPosition` was
+  filled for every player, and the collector ran end to end with no fixes. A
+  short tiered crawl got matches from every bracket (Challenger 9, GM 12,
+  Master 9, Diamond 6, Emerald 4 out of 40).
+- **Real data collected so far: none kept.** The test crawls lived in a temporary
+  cloud container and are gone.
+- **API key:** the owner now has a Riot key for a registered dev app (no 24-hour
+  expiry). It's kept locally, never in git or chat.
+- **Model has not yet been run on real data.** That's the next milestone.
+
+## Where to run things
+
+- **Collector: run on the owner's PC**, not in a Claude cloud session. Cloud
+  containers get wiped when idle, background commands stop after 2 hours, and the
+  database (~1 GB/day per region) is too big for git. On a PC it can run for
+  days, and it resumes where it left off because progress is saved in the DB.
+- **Code changes and analysis:** any Claude Code session (cloud or local). Push
+  code to GitHub, pull on the PC.
+- Cloud sessions that need the API must allow the Riot hosts
+  (`na1/euw1/kr/americas/europe/asia.api.riotgames.com`) and
+  `ddragon.leagueoflegends.com` in the environment's network settings, and get
+  the key via the environment's secrets. Never paste it into chat.
+
+## How to run
+
+```bash
+git clone https://github.com/lennytheworm12/hidden-op && cd hidden-op
+git checkout elo-brackets
+pip install -r requirements.txt
+export RIOT_API_KEY=...            # Windows PowerShell: $env:RIOT_API_KEY="..."
+
+# One terminal per region (rate limits are per region, so they run in parallel).
+python -m hiddenop.collector.collect --platform na1  --days 14
+python -m hiddenop.collector.collect --platform euw1 --days 14
+python -m hiddenop.collector.collect --platform kr   --days 14
+# Ctrl+C to stop; add --skip-seed to resume without re-fetching player lists.
+
+# After roughly one patch of data:
+python scripts/run_model.py --tiers EMERALD           # one bracket at a time
+python scripts/run_model.py --tiers MASTER+
+python scripts/run_model.py --score-pair Sylas:BOTTOM --score-pair Nidalee:UTILITY
+python scripts/run_model.py --synthetic               # demo, no key needed
+```
+
+Useful collector options: `--tiers` (default `MASTER+,DIAMOND,EMERALD`; e.g. add
+`PLATINUM`), `--pages-per-division` (~205 players per page, default 3),
+`--per-player` (match IDs per player per pass, default 10, keeps brackets
+balanced), `--max-matches`, `--db` (default `data/hiddenop.db`).
+
+Throughput: ~100 requests / 2 min per region ⇒ roughly 70k matches/day/region.
+
+## What data is stored (SQLite, `data/hiddenop.db`)
+
+- `players`: puuid, platform, tier, last crawled.
+- `matches`: id, platform, patch, start time, duration, **tier** (tier of the
+  seed player it was found through), and the **full raw match JSON, compressed**.
+- `participants`: one row per player per match with champion, role
+  (`teamPosition`), win, **final items** (6 slots + trinket), damage to
+  champions, healing and shielding on allies, and deaths.
+- Everything else in the match JSON (runes, summoner spells, gold, CS, vision,
+  KDA, ...) is in the raw blob and can be extracted later without new API calls.
+- **Not collected:** build order and skill order. Those need the timeline
+  endpoint, which costs one extra call per match (it would halve throughput).
+  Final items are enough to detect build variants like blue Ezreal.
+
+## Code map
+
+| Path | What |
+|---|---|
+| `hiddenop/collector/riot_client.py` | Riot API client, two-window rate limiter per host, retries on 429/5xx |
+| `hiddenop/collector/collect.py` | Seeds players by tier, crawls round-robin across tiers |
+| `hiddenop/collector/storage.py` | SQLite schema, raw-JSON storage, auto-migration for old DBs |
+| `hiddenop/aggregate.py` | Participants → champion × role × patch table (filterable by tier) |
+| `hiddenop/archetypes.py` | Champion → archetype from Data Dragon tags + CSV overrides |
+| `hiddenop/model.py` | Hierarchical logistic model, MAP + Laplace intervals |
+| `hiddenop/score.py` | Ranking and hidden-OP flags, plus naive raw-WR columns |
+| `hiddenop/backtest.py` | Walk-forward: do flagged picks keep winning next patch? |
+| `hiddenop/simulate.py` | Synthetic world with planted hidden and decoy picks (for tests) |
+| `scripts/run_model.py` | Fit on the DB and write `results/scores.csv` |
+| `tests/test_model_recovery.py` | The 7 synthetic checks |
 
 ## Design decisions
 
-- **Model = MAP + Laplace, not MCMC.** ~750 params, fits in <1 s. Good enough for
-  intervals. If you want learned hyperparameters (prior SDs), move to
-  PyMC/NumPyro or tune `Priors` by held-out log-likelihood across patches.
-- **Strength excludes the playrate term.** `adj_wr` = predicted WR at the role's
-  typical playrate. Known caveat: the playrate slope mixes two opposite effects —
-  one-trick inflation (niche looks better) and "strong picks get popular"
-  (popular looks better). β is the net; the mastery correction (v2) is what
-  actually separates them.
-- **Priors:** champ 0.15, archetype×role 0.15, champ×role offset 0.10 (logit).
-  The tight offset prior is what lets Sylas BOTTOM borrow from Sylas + Mage-in-bot.
-- **Raw match JSON is stored compressed** so new features (timelines aside) can
-  be extracted without re-spending API budget.
-- **Rank = seed player's tier, fit per bracket.** Match-v5 has no rank field, so a
-  match is labelled by the tier of the player we found it through (the other 9
-  are usually nearby). Brackets are fit separately because baseline winrates and
-  playrate bias differ by rank. A pooled model with a champ×role×bracket offset
-  (strength in Emerald informs Master, with shrinkage) is the natural v2 upgrade.
-- **Archetypes = Data Dragon primary tag** for v1. Coarse but objective. Override
-  via `data/archetypes_override.csv`.
+- **Model = MAP + Laplace, not MCMC.** ~750 parameters, fits in under a second.
+  Good enough for intervals. For learned prior widths, move to PyMC/NumPyro or
+  tune `Priors` by held-out log-likelihood across patches.
+- **Strength excludes the playrate term.** Caveat: the playrate slope mixes two
+  opposite effects, one-trick inflation (niche looks better) and "strong picks
+  get popular" (popular looks better). β is the net effect. The mastery
+  correction (v2) is what actually separates them.
+- **Priors (logit scale):** champion 0.15, archetype×role 0.15, champion×role
+  offset 0.10. The tight offset is what lets Sylas BOTTOM borrow from Sylas
+  overall and from Mage-in-bot.
+- **Rank = seed player's tier; fit one bracket at a time.** Match-v5 has no rank
+  field, so each match is labelled by the tier of the player it was found
+  through (the other nine are usually nearby). Baseline winrates and playrate
+  bias differ by rank, so brackets aren't mixed.
+- **Archetypes = Data Dragon primary tag** (Fighter, Tank, Mage, Assassin,
+  Marksman, Support). Coarse but objective. Override in
+  `data/archetypes_override.csv`.
+- **Raw JSON is kept** because API budget is the scarce resource, not disk.
 
-## Roadmap
+## Next steps, in order
 
-**v2 — corrections that matter most**
-- One-trick/mastery correction: for low-playrate candidates, pull
-  champion-mastery-v4 for their players; compare WR at matched experience levels
-  and use winrate delta (game result minus player's own baseline).
-- Build-path splitting: cluster item sets per champion so AP Shaco and AD Shaco
-  become separate "picks" (items are already stored).
-- Draft-position / counterpick split if obtainable.
+1. **Collect** about one patch of data on the PC (na1, euw1, kr).
+2. **First real run:** fit per bracket and sanity-check the top of each table
+   against game knowledge. Expect to tune `--max-playrate` and the minimum games.
+3. **Build splitting:** cluster final item sets per champion so AP vs AD Shaco,
+   or blue vs standard Ezreal, become separate "picks". The data is already stored.
+4. **One-trick/mastery correction:** for low-playrate candidates, pull
+   champion-mastery-v4 for their players and compare at matched experience
+   (winrate delta = result minus the player's own baseline).
+5. **Pooled ranks:** one model with a champion×role×bracket offset, so strength
+   seen in Emerald informs Master with shrinkage, instead of fully separate fits.
+6. **Headline backtest:** train on patches before a known breakout off-role pick
+   (candidates to verify: Seraphine/Swain/Ziggs/Karthus bot) and check its rank
+   while its playrate was near zero. Match-v5 only serves recent history, so this
+   probably needs an archived dataset. Finding a source is an open task.
 
-**v3 — richer identity**
-- Matchup interactions (archetype × enemy-archetype in lane).
-- Learned embeddings (matrix factorization on matchup outcomes) vs hand tags.
-- Behavioral features per game (damage to champs, heals on allies, deaths) so a
-  support-style Nidalee game looks like an enchanter game, not a jungle one.
+Later (v3): matchup interactions (archetype vs enemy archetype in lane), learned
+champion embeddings from matchup outcomes instead of hand tags, and per-game
+behavior features (damage, healing, deaths) so a support-style Nidalee game looks
+like an enchanter game rather than a jungle one.
 
-**Headline evaluation for the write-up**
-- Backtest on older patches: train before a known breakout off-role pick
-  (verify which patches — candidates: Seraphine/Swain/Ziggs/Karthus bot) and check
-  its rank while its playrate was still near zero. Match-v5 only serves recent
-  history, so this likely needs an archived dataset — investigate sources.
-- Before/after table: naive top-10 by raw WR vs model top-10.
+## Open questions
+
+- Which archived dataset could cover older patches for the backtest?
+- Right playrate cutoff for "hidden" (1% now). It may need to differ by role or rank.
+- Minimum sample before a pick is shown at all, vs. just showing wide intervals.
 
 ## Outreach
 
 Once there's a real backtest number, email Machine LoLing (contact on their
-homepage). Lead with the result; reference their champion-identity post and the
-commenter asking about cross-lane counters.
+homepage, machineloling.com). Lead with the result. Reference their
+champion-identity post (their embeddings are per-role and remove the strength
+direction; this project is cross-role and strength-focused) and the commenter who
+asked about cross-lane counters.
