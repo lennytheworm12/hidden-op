@@ -17,8 +17,8 @@ import argparse
 import logging
 import time
 
-from .riot_client import RiotClient
-from .storage import connect, known_match, store_match
+from .riot_client import GaveUp, RiotClient
+from .storage import connect, known_match, queue_mastery, store_mastery, store_match, store_timeline
 
 log = logging.getLogger("collect")
 
@@ -41,6 +41,12 @@ def _add(con, entries, platform: str, tier: str) -> int:
     if entries and not rows:
         log.warning("%s %s: entries have no puuid field; league-v4 may have changed", platform, tier)
     con.executemany("INSERT OR IGNORE INTO players(puuid, platform, tier) VALUES (?,?,?)", rows)
+    now = int(time.time())
+    con.executemany(
+        "INSERT OR IGNORE INTO ladder_snapshots VALUES (?,?,?,?,?,?,?,?)",
+        [(e["puuid"], platform, now, tier, "" if tier in APEX else e.get("rank", ""),
+          e.get("leaguePoints"), e.get("wins"), e.get("losses"))
+         for e in entries if e.get("puuid")])
     return len(rows)
 
 
@@ -62,8 +68,33 @@ def seed_players(client: RiotClient, con, platform: str, tiers: list[str],
     return n
 
 
+def drain_mastery(client: RiotClient, con, platform: str, limit: int = 20) -> int:
+    """Fetch queued players' mastery, but only while the platform API has spare
+    capacity, so it never slows down match collection (which uses the regional API).
+    Newest first, so a lookup lands close to the games it describes."""
+    n = 0
+    while n < limit and client.has_capacity(platform):
+        row = con.execute("SELECT puuid FROM mastery_todo WHERE platform=? ORDER BY added_at DESC LIMIT 1",
+                          (platform,)).fetchone()
+        if not row:
+            break
+        try:
+            entries = client.mastery_all(platform, row[0])
+        except GaveUp as e:
+            log.warning("skipping mastery: %s", e)
+            con.execute("DELETE FROM mastery_todo WHERE puuid=?", row)
+            con.commit()
+            continue
+        store_mastery(con, platform, row[0], entries or [])
+        con.commit()
+        n += 1
+    return n
+
+
 def crawl(client: RiotClient, con, platform: str, days: int, max_matches: int,
-          per_player: int = 10) -> None:
+          per_player: int = 10, timelines: bool = True, mastery: bool = True,
+          mastery_refresh_days: float = 7) -> int:
+    """One pass over this platform's players. Returns the number of new matches."""
     start_time = int(time.time()) - days * 86400
     got = 0
     # Round-robin across tiers: least-recently-crawled first, interleaved by tier.
@@ -74,22 +105,47 @@ def crawl(client: RiotClient, con, platform: str, days: int, max_matches: int,
                FROM players WHERE platform=?)
            ORDER BY k, tier""", (platform,)
     ).fetchall()
+    log.info("%s: crawling %d players", platform, len(players))
     for puuid, tier in players:
-        for mid in client.match_ids(platform, puuid, start_time=start_time, count=per_player):
+        try:
+            ids = client.match_ids(platform, puuid, start_time=start_time, count=per_player)
+        except GaveUp as e:
+            log.warning("skipping player: %s", e)
+            continue
+        for mid in ids:
             if known_match(con, mid):
                 continue
-            m = client.match(platform, mid)
+            try:
+                m = client.match(platform, mid)
+            except GaveUp as e:
+                log.warning("skipping match: %s", e)
+                continue
             if m and m.get("info", {}).get("queueId") == 420:
+                tl = None
+                if timelines:
+                    try:
+                        tl = client.timeline(platform, mid)
+                    except GaveUp as e:  # keep the match; the timeline can be backfilled
+                        log.warning("no timeline: %s", e)
                 store_match(con, platform, m, tier=tier)
+                if tl:
+                    store_timeline(con, mid, tl)
+                if mastery:
+                    queue_mastery(con, platform, [p["puuid"] for p in m["info"]["participants"]],
+                                  mastery_refresh_days)
+                # Commit per match: other regions' collectors share the DB, and a
+                # long-open write transaction would block them.
+                con.commit()
+                if mastery:
+                    drain_mastery(client, con, platform)
                 got += 1
                 if got % 100 == 0:
-                    con.commit()
                     log.info("%s: %d new matches", platform, got)
                 if got >= max_matches:
-                    con.commit()
-                    return
+                    return got
         con.execute("UPDATE players SET last_crawled=? WHERE puuid=?", (int(time.time()), puuid))
-    con.commit()
+        con.commit()
+    return got
 
 
 def main():
@@ -105,15 +161,40 @@ def main():
     ap.add_argument("--per-player", type=int, default=10,
                     help="recent match IDs to take per player per pass (keeps tiers balanced)")
     ap.add_argument("--skip-seed", action="store_true")
+    ap.add_argument("--no-timelines", action="store_true",
+                    help="skip build/skill order (timelines cost one extra call per match)")
+    ap.add_argument("--no-mastery", action="store_true", help="skip champion mastery lookups")
+    ap.add_argument("--mastery-refresh-days", type=float, default=7,
+                    help="re-fetch a player's mastery when the last lookup is older than this")
+    ap.add_argument("--loop", action="store_true",
+                    help="keep crawling pass after pass (re-seeding daily) until --max-matches or Ctrl+C")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     client = RiotClient()
     con = connect(args.db)
-    if not args.skip_seed:
-        log.info("seeded %d players", seed_players(client, con, args.platform,
-                                                         parse_tiers(args.tiers), args.pages_per_division))
-    crawl(client, con, args.platform, args.days, args.max_matches, args.per_player)
+    tiers = parse_tiers(args.tiers)
+    seeded_at = 0.0
+    total = 0
+    while True:
+        # Ladders change, so a long --loop run re-seeds once a day.
+        if not args.skip_seed and time.time() - seeded_at > 86400:
+            log.info("seeded %d players", seed_players(client, con, args.platform, tiers,
+                                                     args.pages_per_division))
+            seeded_at = time.time()
+        got = crawl(client, con, args.platform, args.days, args.max_matches - total, args.per_player,
+                    timelines=not args.no_timelines, mastery=not args.no_mastery,
+                    mastery_refresh_days=args.mastery_refresh_days)
+        total += got
+        log.info("%s: pass done, %d new matches (%d this run)", args.platform, got, total)
+        if not args.loop or total >= args.max_matches:
+            break
+        if got == 0:
+            log.info("nothing new; fetching queued mastery for 30 min, then crawling again")
+            end = time.time() + 1800
+            while time.time() < end:
+                if args.no_mastery or drain_mastery(client, con, args.platform) == 0:
+                    time.sleep(5)
 
 
 if __name__ == "__main__":

@@ -45,7 +45,8 @@ interval sits entirely above 50% and its playrate is under 1%.
 
 - **Code:** working v1 on branch **`elo-brackets`** (not yet merged into `main`;
   `main` lacks the rank-bracket changes). Use that branch.
-- **Tests:** `python -m pytest` passes 7 checks on a simulated world: a planted
+- **Tests:** `python -m pytest` passes 8 checks: one collector check with a fake
+  client, and 7 on a simulated world: a planted
   hidden pick is flagged, a playrate-inflated decoy isn't, adjusted WR tracks
   ground truth far better than raw WR (r≈0.89 vs 0.41), ≥80% of flagged picks are
   truly positive, the playrate bias is recovered, unseen combos get wide
@@ -65,7 +66,7 @@ interval sits entirely above 50% and its playrate is under 1%.
 
 - **Collector: run on the owner's PC**, not in a Claude cloud session. Cloud
   containers get wiped when idle, background commands stop after 2 hours, and the
-  database (~1 GB/day per region) is too big for git. On a PC it can run for
+  database (~0.75 GB/day per region) is too big for git. On a PC it can run for
   days, and it resumes where it left off because progress is saved in the DB.
 - **Code changes and analysis:** any Claude Code session (cloud or local). Push
   code to GitHub, pull on the PC.
@@ -76,19 +77,66 @@ interval sits entirely above 50% and its playrate is under 1%.
 
 ## How to run
 
-```bash
-git clone https://github.com/lennytheworm12/hidden-op && cd hidden-op
+On the owner's Windows PC, in PowerShell:
+
+```powershell
+git clone https://github.com/lennytheworm12/hidden-op; cd hidden-op
 git checkout elo-brackets
 pip install -r requirements.txt
-export RIOT_API_KEY=...            # Windows PowerShell: $env:RIOT_API_KEY="..."
+python -m pytest                     # 8 checks, no key needed
+# Save the key to .env (gitignored). It prompts, so the key never lands in shell history.
+$k = Read-Host "Riot API key"; Set-Content .env "RIOT_API_KEY=$k"
+powercfg /change standby-timeout-ac 0   # stop the PC sleeping while plugged in
 
-# One terminal per region (rate limits are per region, so they run in parallel).
-python -m hiddenop.collector.collect --platform na1  --days 14
-python -m hiddenop.collector.collect --platform euw1 --days 14
-python -m hiddenop.collector.collect --platform kr   --days 14
-# Ctrl+C to stop; add --skip-seed to resume without re-fetching player lists.
+# One terminal per region, all in the hidden-op folder. They share one DB safely.
+python -m hiddenop.collector.collect --platform na1  --days 14 --loop --max-matches 2000000
+python -m hiddenop.collector.collect --platform euw1 --days 14 --loop --max-matches 2000000
+python -m hiddenop.collector.collect --platform kr   --days 14 --loop --max-matches 2000000
 
-# After roughly one patch of data:
+# Or start all three in their own windows with one command:
+powershell -ExecutionPolicy Bypass -File scripts\start_collectors.ps1
+
+# Any time, from a fourth terminal:
+python scripts/db_status.py          # matches per region/tier/patch, DB size
+```
+
+The key is read from `RIOT_API_KEY` if set, else from `.env` in the folder you
+run from. Ctrl+C stops a collector; rerun the same command to resume (progress is
+in the DB; add `--skip-seed` to skip re-fetching ladders). With `--loop` it keeps
+doing passes over the ladder, re-seeds daily, and sleeps 30 min when a pass finds
+nothing new. Network drops and Riot 5xx are retried with backoff, then skipped,
+so a long run doesn't die on one bad request. A rejected key (401/403) stops it.
+
+**Shutdowns and crashes are safe.** Each match is committed on its own, so a
+kill or power cut loses at most the match in flight; SQLite rolls back the
+partial write, and the next run skips stored matches and continues with players
+not yet crawled. (Tested by killing a crawl 3 times mid-run: integrity check ok,
+no duplicates, no gaps.) To restart automatically after a reboot, register
+`scripts/start_collectors.ps1` to run at logon (command at the top of that file).
+
+Disk: about 0.75 GB/day per region, so ~32 GB for two weeks of three regions.
+
+**Storage: live DB local, backups on Google Drive.** Keep `data/hiddenop.db` on
+the PC's own disk, not in a Drive/OneDrive folder: three processes writing SQLite
+inside a syncing folder risks locks and corruption, and Drive would keep
+re-uploading a growing multi-GB file. Google Drive (owner has 2 TB) is the default
+backup target: `snapshot_db.py` finds the Google Drive for Desktop folder and
+writes a consistent copy to `My Drive/hidden-op/`, safe while collecting.
+
+```powershell
+python scripts/snapshot_db.py --slim   # full hiddenop.db + small hiddenop-slim.db (no raw JSON)
+
+# Run it automatically every day at 4 AM (from the hidden-op folder):
+$a = New-ScheduledTaskAction -Execute (Get-Command python).Source -Argument "scripts\snapshot_db.py --slim" -WorkingDirectory (Get-Location).Path
+Register-ScheduledTask -TaskName "hidden-op backup" -Action $a -Trigger (New-ScheduledTaskTrigger -Daily -At 4am)
+```
+
+Override the location with `--out FOLDER` or `BACKUP_DIR=...` in `.env`. The slim
+copy has everything the model needs and is what a cloud session should download.
+
+After roughly one patch of data:
+
+```bash
 python scripts/run_model.py --tiers EMERALD           # one bracket at a time
 python scripts/run_model.py --tiers MASTER+
 python scripts/run_model.py --score-pair Sylas:BOTTOM --score-pair Nidalee:UTILITY
@@ -100,7 +148,8 @@ Useful collector options: `--tiers` (default `MASTER+,DIAMOND,EMERALD`; e.g. add
 `--per-player` (match IDs per player per pass, default 10, keeps brackets
 balanced), `--max-matches`, `--db` (default `data/hiddenop.db`).
 
-Throughput: ~100 requests / 2 min per region ⇒ roughly 70k matches/day/region.
+Throughput: ~100 requests / 2 min per region ⇒ roughly 30k matches/day/region with
+timelines (2 calls per match), 70k with `--no-timelines`.
 
 ## What data is stored (SQLite, `data/hiddenop.db`)
 
@@ -110,11 +159,26 @@ Throughput: ~100 requests / 2 min per region ⇒ roughly 70k matches/day/region.
 - `participants`: one row per player per match with champion, role
   (`teamPosition`), win, **final items** (6 slots + trinket), damage to
   champions, healing and shielding on allies, and deaths.
+- `ladder_snapshots`: every time the ladder is seeded (daily with `--loop`),
+  each seeded player's tier, division, LP, wins and losses, timestamped. This is
+  the only record of rank at game time, which can't be fetched later. Join on
+  `participants.puuid` to rank most of the other nine players in a match too.
+- `timelines`: per player per match, **build order** (every buy/sell/undo with
+  its time), **skill order** (e.g. `QEWQQRQ...`), and gold/CS/XP at 10 and 15
+  minutes. Extracted from the timeline endpoint; the ~1 MB raw timeline isn't kept.
+  If a timeline fetch fails the match is still kept (backfill later).
+- `mastery`: each player's mastery on every champion (points, level, last
+  played), one compressed snapshot per lookup, refreshed after 7 days. Players
+  are queued in `mastery_todo` when seen in a match and fetched newest first, only
+  when the platform API is idle, so it never slows match collection. Coverage is
+  partial: ~70k lookups/day/region vs more new players than that. Read with
+  `storage.mastery_of(con, puuid, champion_id)`.
 - Everything else in the match JSON (runes, summoner spells, gold, CS, vision,
   KDA, ...) is in the raw blob and can be extracted later without new API calls.
-- **Not collected:** build order and skill order. Those need the timeline
-  endpoint, which costs one extra call per match (it would halve throughput).
-  Final items are enough to detect build variants like blue Ezreal.
+
+Cost: timelines are one extra call per match, so collection is ~30k
+matches/day/region (was ~70k). Turn off with `--no-timelines` / `--no-mastery`.
+Disk ~0.75 GB/day/region, ~32 GB for two weeks of three regions.
 
 ## Code map
 
@@ -130,7 +194,10 @@ Throughput: ~100 requests / 2 min per region ⇒ roughly 70k matches/day/region.
 | `hiddenop/backtest.py` | Walk-forward: do flagged picks keep winning next patch? |
 | `hiddenop/simulate.py` | Synthetic world with planted hidden and decoy picks (for tests) |
 | `scripts/run_model.py` | Fit on the DB and write `results/scores.csv` |
+| `scripts/snapshot_db.py` | Consistent copy of the DB to another folder (e.g. Drive); `--slim` drops raw JSON |
+| `scripts/db_status.py` | Progress report on the collected data (safe while collecting) |
 | `tests/test_model_recovery.py` | The 7 synthetic checks |
+| `tests/test_collector.py` | Collector check with a fake client |
 
 ## Design decisions
 
@@ -160,8 +227,8 @@ Throughput: ~100 requests / 2 min per region ⇒ roughly 70k matches/day/region.
    against game knowledge. Expect to tune `--max-playrate` and the minimum games.
 3. **Build splitting:** cluster final item sets per champion so AP vs AD Shaco,
    or blue vs standard Ezreal, become separate "picks". The data is already stored.
-4. **One-trick/mastery correction:** for low-playrate candidates, pull
-   champion-mastery-v4 for their players and compare at matched experience
+4. **One-trick/mastery correction:** mastery is now collected as data comes in
+   (`mastery` table); for low-playrate candidates, top up any missing players and compare at matched experience
    (winrate delta = result minus the player's own baseline).
 5. **Pooled ranks:** one model with a champion×role×bracket offset, so strength
    seen in Emerald informs Master with shrinkage, instead of fully separate fits.
@@ -169,6 +236,67 @@ Throughput: ~100 requests / 2 min per region ⇒ roughly 70k matches/day/region.
    (candidates to verify: Seraphine/Swain/Ziggs/Karthus bot) and check its rank
    while its playrate was near zero. Match-v5 only serves recent history, so this
    probably needs an archived dataset. Finding a source is an open task.
+
+### Role-aware modeling (from `main`'s handoff, not yet scheduled)
+
+Working hypothesis: top lane is more matchup-specific than other roles. Melee
+tops must enter the enemy's threat range to farm, so every last hit is a trade,
+and matchups hinge on several cross-cutting traits (true/%HP damage, sustain,
+range, all-in power, tankiness, wave clear). Marksmen and mages differ on fewer
+of these, so skills transfer (Caitlyn → Jinx). Machine LoLing's class
+encyclopedia (below) found the same thing from data: support/ADC/mid cluster
+cleanly, but top tanks and fighters correlate with mixed groups and only
+Ranged and Duelist form clean classes.
+
+- **Archetypes from Machine LoLing.** Use their Season 16 per-role classes
+  (matchup + synergy delta profiles, WR-corrected, empirical-Bayes shrunk,
+  correlation + Ward/SNN clustering) for support, ADC, mid, jungle. For top,
+  don't force classes — lean on champion-specific estimates.
+  https://machineloling.com/2026/04/13/the-definitive-season-16-champion-class-encyclopedia/
+- **Role-specific priors.** Looser champion×role offset (and weaker
+  archetype×role pooling) for TOP. Pick the SDs per role by held-out
+  log-likelihood across patches.
+- **Blind score vs counter score** (top first, then all roles). A single WR
+  blends blind and counter contexts — e.g. Vayne top is coinflippy blind but
+  strong into Gnar/Jayce. Report per champion:
+  - *Blind score*: opponent-playrate-weighted mean matchup delta, minus
+    penalties for matchup variance and bad worst cases (≈ blindability).
+  - *Counter score*: best matchups weighted by how often those opponents are
+    played — surfaces niche picks that punish popular blinds.
+  Piggyback on Machine LoLing's blindability work. Their Champion Pool Designer
+  (https://pooldesigner.machineloling.com) is what the blindability video
+  (https://machineloling.com/2026/10/30/the-math-behind-champion-blindability/)
+  is based on. What the tool page states (formula itself not published):
+  - Blindability = an aggregate z-score of how consistently a champion performs
+    across opponents *and partners* (so it includes synergy, not just lane
+    matchups); "polarized" champions score low. Shared z-scale across the tool.
+  - Matchup/synergy Δs: Diamond+, patches 16.1–16.4, WR-corrected (champion's
+    overall WR removed). Opponent/partner pick-rate floor 0.5%; optional
+    pick-rate weighting. Playrates from a later patch across Silver–Master+.
+  - No separate counter metric — their matchup Δ plays that role. So our
+    *counter score* (playrate-weighted best matchups) is a genuine extension.
+  - Individual Champ Compare reports Pearson similarity of Δ vectors (matchup,
+    synergy, total) plus Blind Δz — useful for validating our archetypes.
+  To do: watch the video for the exact formula and match it; compare our blind
+  score against their Blind Δz on shared champions as a sanity check.
+  Data access: the UI runs on a live API but there's no documented export.
+  Read their "Terms and data license" page before pulling any numbers from it;
+  otherwise compute our own Δs from collected matches (same recipe as above).
+  Their data says Ahri (mid) is very blindable; in top essentially only Gnar
+  is — his kit covers two axes (mini outranges melee, mega survives all-ins), so
+  his counters beat him on both (Jayce, Vayne/Tristana top, Sylas).
+- **Tests of the hypothesis** (good blog material: "why top lane breaks clustering"):
+  1. Matchup variance by role — spread of shrunk champ-vs-champ deltas should be
+     widest in top if top is more matchup-dependent.
+  2. Hand-drawn groups (juggernauts: Darius/Mordekaiser/Garen vs skirmishers:
+     Riven/Fiora) — is within-group matchup correlation clearly higher than
+     between-group? If yes, the categories exist and clustering method/noise is
+     the problem.
+  3. Factor model (matrix factorization on matchup deltas) per role: how many
+     dimensions does each role need? If top needs more and the axes are
+     interpretable (anti-tank, extended fighter, ranged bully), that supports
+     "top laners are mixtures of traits, not members of one class" — and the
+     factor weights replace hard archetype tags as model input.
 
 Later (v3): matchup interactions (archetype vs enemy archetype in lane), learned
 champion embeddings from matchup outcomes instead of hand tags, and per-game

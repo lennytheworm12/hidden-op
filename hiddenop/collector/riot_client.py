@@ -5,11 +5,15 @@ Personal/dev keys: 20 req / 1 s and 100 req / 120 s, enforced per routing value
 """
 from __future__ import annotations
 
+import logging
 import os
 import time
 from collections import deque
+from pathlib import Path
 
 import requests
+
+log = logging.getLogger("riot")
 
 PLATFORM_TO_REGION = {
     "na1": "americas", "br1": "americas", "la1": "americas", "la2": "americas",
@@ -25,6 +29,16 @@ class RateLimiter:
     def __init__(self, limits=DEFAULT_LIMITS, safety=0.9):
         # Run slightly under the limit so clock skew doesn't trigger 429s.
         self.windows = [(max(1, int(n * safety)), secs, deque()) for n, secs in limits]
+
+    def has_capacity(self) -> bool:
+        """True if a request could go out right now without waiting."""
+        now = time.monotonic()
+        for n, secs, hist in self.windows:
+            while hist and now - hist[0] >= secs:
+                hist.popleft()
+            if len(hist) >= n:
+                return False
+        return True
 
     def acquire(self) -> None:
         while True:
@@ -42,23 +56,46 @@ class RateLimiter:
             time.sleep(wait + 0.01)
 
 
+class GaveUp(RuntimeError):
+    """A request kept failing (network or 5xx). The caller can skip it and move on."""
+
+
+def dotenv_value(name: str, path: Path = Path(".env")) -> str | None:
+    """Read NAME=value from a .env file (so each terminal doesn't need it exported)."""
+    try:
+        # utf-8-sig: Windows PowerShell may write a byte-order mark.
+        for line in path.read_text(encoding="utf-8-sig").splitlines():
+            k, sep, v = line.strip().partition("=")
+            if sep and k.strip() == name:
+                return v.strip().strip('"').strip("'") or None
+    except OSError:
+        pass
+    return None
+
+
 class RiotClient:
     def __init__(self, api_key: str | None = None, limits=DEFAULT_LIMITS, timeout=10):
-        self.api_key = api_key or os.environ.get("RIOT_API_KEY")
+        self.api_key = api_key or os.environ.get("RIOT_API_KEY") or dotenv_value("RIOT_API_KEY")
         if not self.api_key:
-            raise RuntimeError("Set RIOT_API_KEY (see .env.example)")
+            raise RuntimeError("Set RIOT_API_KEY or put it in .env (see .env.example)")
         self.session = requests.Session()
         self.session.headers["X-Riot-Token"] = self.api_key
         self.limits = limits
         self.timeout = timeout
         self._limiters: dict[str, RateLimiter] = {}
 
-    def _get(self, host: str, path: str, params=None, max_retries=5):
+    def _get(self, host: str, path: str, params=None, max_retries=8):
         limiter = self._limiters.setdefault(host, RateLimiter(self.limits))
         url = f"https://{host}.api.riotgames.com{path}"
         for attempt in range(max_retries):
             limiter.acquire()
-            r = self.session.get(url, params=params, timeout=self.timeout)
+            backoff = min(2 ** attempt, 300)
+            try:
+                r = self.session.get(url, params=params, timeout=self.timeout)
+            except requests.RequestException as e:  # Wi-Fi drop, DNS blip, timeout
+                log.warning("network error on %s (%s); retrying in %ds", host, e.__class__.__name__, backoff)
+                time.sleep(backoff)
+                continue
             if r.status_code == 200:
                 return r.json()
             if r.status_code == 404:
@@ -67,10 +104,16 @@ class RiotClient:
                 time.sleep(float(r.headers.get("Retry-After", 5)))
                 continue
             if r.status_code >= 500:
-                time.sleep(2 ** attempt)
+                log.warning("HTTP %d from %s; retrying in %ds", r.status_code, host, backoff)
+                time.sleep(backoff)
                 continue
+            if r.status_code in (401, 403):
+                raise RuntimeError(f"HTTP {r.status_code}: API key rejected or expired. Check RIOT_API_KEY.")
             r.raise_for_status()
-        raise RuntimeError(f"Gave up on {url} after {max_retries} attempts")
+        raise GaveUp(f"Gave up on {url} after {max_retries} attempts")
+
+    def has_capacity(self, host: str) -> bool:
+        return self._limiters.setdefault(host, RateLimiter(self.limits)).has_capacity()
 
     # --- league-v4 (platform routing) ---
     def apex_league(self, platform: str, tier: str, queue="RANKED_SOLO_5x5"):
@@ -96,7 +139,15 @@ class RiotClient:
         region = PLATFORM_TO_REGION[platform]
         return self._get(region, f"/lol/match/v5/matches/{match_id}")
 
-    # --- champion-mastery-v4 (platform routing) — for the v2 one-trick correction ---
+    def timeline(self, platform: str, match_id: str):
+        region = PLATFORM_TO_REGION[platform]
+        return self._get(region, f"/lol/match/v5/matches/{match_id}/timeline")
+
+    # --- champion-mastery-v4 (platform routing) — for the one-trick correction ---
+    def mastery_all(self, platform: str, puuid: str):
+        """Every champion's mastery for one player, in one call."""
+        return self._get(platform, f"/lol/champion-mastery/v4/champion-masteries/by-puuid/{puuid}")
+
     def mastery(self, platform: str, puuid: str, champion_id: int):
         return self._get(
             platform,
