@@ -144,9 +144,24 @@ python scripts/run_model.py --synthetic               # demo, no key needed
 ```
 
 Useful collector options: `--tiers` (default `MASTER+,DIAMOND,EMERALD`; e.g. add
-`PLATINUM`), `--pages-per-division` (~205 players per page, default 3),
-`--per-player` (match IDs per player per pass, default 10, keeps brackets
-balanced), `--max-matches`, `--db` (default `data/hiddenop.db`).
+`PLATINUM`), `--pages-per-division` (~205 players per page, default 0 = whole
+ladder), `--max-per-player` (default 5: a player already in 5 stored games from
+the `--days` window is skipped without an API call), `--per-player` (match IDs
+looked at per player per pass, default 10), `--max-matches`, `--db` (default
+`data/hiddenop.db`).
+
+**Breadth over depth (since 2026-11-27).** Before this, only the first 3 pages of
+each Diamond/Emerald division were seeded (~17k players per region, ~11k of them
+Master) and every pass re-took their latest games. After 4 days, the 44k seeded
+players averaged ~30 games each and made up 54% of all participant rows; the
+other 347k players averaged 3. For rare champions that is the wrong shape: one
+grinder's skill is in all of their games, so the effective sample is closer to
+the number of players than the number of games. Now the whole Diamond/Emerald
+ladder is seeded (likely 100k+ players per region) and each player is capped,
+so the same budget is spread over far more players. Costs: the daily full
+re-seed takes an estimated 15-45 min of platform-API calls per region (the match
+crawl pauses meanwhile), ladder snapshots grow to an estimated 1-2 GB per two
+weeks, and mastery coverage per player drops because there are more players.
 
 Throughput: ~100 requests / 2 min per region ⇒ roughly 30k matches/day/region with
 timelines (2 calls per match), 70k with `--no-timelines`.
@@ -185,7 +200,7 @@ Disk ~0.75 GB/day/region, ~32 GB for two weeks of three regions.
 | Path | What |
 |---|---|
 | `hiddenop/collector/riot_client.py` | Riot API client, two-window rate limiter per host, retries on 429/5xx |
-| `hiddenop/collector/collect.py` | Seeds players by tier, crawls round-robin across tiers |
+| `hiddenop/collector/collect.py` | Seeds full ladders by tier, crawls round-robin across tiers with a games-per-player cap |
 | `hiddenop/collector/storage.py` | SQLite schema, raw-JSON storage, auto-migration for old DBs |
 | `hiddenop/aggregate.py` | Participants → champion × role × patch table (filterable by tier) |
 | `hiddenop/archetypes.py` | Champion → archetype from Data Dragon tags + CSV overrides |

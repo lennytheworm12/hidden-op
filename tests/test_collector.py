@@ -91,3 +91,47 @@ def test_seed_keeps_ladder_snapshot(tmp_path):
     rows = dict((r[0], r[1:]) for r in con.execute(
         "SELECT puuid, tier, division, lp, wins, losses FROM ladder_snapshots"))
     assert rows == {"x": ("MASTER", "", 812, 120, 90), "y": ("EMERALD", "I", 55, 30, 25)}
+
+
+def test_seed_all_pages_and_retier(tmp_path):
+    class Paged(FakeLadder):
+        def league_entries(self, platform, tier, div, page):
+            if div != "I" or page > 3:
+                return []
+            return [{"puuid": f"y{page}", "rank": "I", "leaguePoints": 1, "wins": 1, "losses": 1}]
+    con = connect(tmp_path / "t.db")
+    assert collect.seed_players(Paged(), con, "na1", ["EMERALD"]) == 3  # 0 = every page
+    assert collect.seed_players(Paged(), con, "na1", ["DIAMOND"], 1) == 1
+    assert con.execute("SELECT tier FROM players WHERE puuid='y1'").fetchone()[0] == "DIAMOND"
+
+
+def test_cap_games_per_player(tmp_path):
+    import time
+    now_ms = int(time.time() * 1000)
+
+    class Busy(FakeClient):
+        def __init__(self):
+            self.ids = {"a": [f"A{i}" for i in range(8)], "a-dup": [], "b": ["B1", "B2"]}
+            self.id_calls = []
+
+        def match_ids(self, platform, puuid, start_time=None, count=10):
+            self.id_calls.append(puuid)
+            return self.ids[puuid][:count]
+
+        def match(self, platform, mid):
+            m = _match(mid)
+            m["info"]["gameStartTimestamp"] = now_ms
+            # player "a" is in every A-game; "b" is in A0..A2 too
+            m["info"]["participants"][0]["puuid"] = "a" if mid.startswith("A") else "b"
+            if mid in ("A0", "A1", "A2"):
+                m["info"]["participants"][1]["puuid"] = "b"
+            return m
+
+    con = connect(tmp_path / "t.db")
+    con.executemany("INSERT INTO players(puuid, platform, tier, last_crawled) VALUES (?,?,?,?)",
+                    [("a", "na1", "EMERALD", 0), ("b", "na1", "EMERALD", 1)])
+    c = Busy()
+    got = collect.crawl(c, con, "na1", days=14, max_matches=100, max_per_player=3, mastery=False)
+    # a: stops after 3 new games (of 8). b: already in A0..A2 -> skipped with no API call.
+    assert got == 3 and c.id_calls == ["a"]
+    assert collect.games_in_window(con, "a", int(time.time()) - 86400) == 3

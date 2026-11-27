@@ -80,6 +80,7 @@ CREATE TABLE IF NOT EXISTS mastery_todo (
     added_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_part_champ_role ON participants(champion, role);
+CREATE INDEX IF NOT EXISTS ix_part_puuid ON participants(puuid);  -- games-per-player cap
 """
 
 
