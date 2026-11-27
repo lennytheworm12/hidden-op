@@ -64,6 +64,7 @@ def seed_players(client: RiotClient, con, platform: str, tiers: list[str],
         if tier in APEX:
             league = client.apex_league(platform, tier.lower()) or {}
             n += _add(con, league.get("entries", []), platform, tier)
+            con.commit()
             continue
         for div in DIVISIONS:
             page = 0
@@ -73,8 +74,10 @@ def seed_players(client: RiotClient, con, platform: str, tiers: list[str],
                 if not entries:
                     break
                 n += _add(con, entries, platform, tier)
+                # Commit every page: the next page is an API call (~1 s), and an open
+                # write transaction across many calls locks out the other regions.
+                con.commit()
                 if page % 50 == 0:
-                    con.commit()
                     log.info("%s %s %s: %d pages so far", platform, tier, div, page)
         log.info("%s %s: seeded", platform, tier)
     con.commit()

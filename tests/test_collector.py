@@ -135,3 +135,23 @@ def test_cap_games_per_player(tmp_path):
     # a: stops after 3 new games (of 8). b: already in A0..A2 -> skipped with no API call.
     assert got == 3 and c.id_calls == ["a"]
     assert collect.games_in_window(con, "a", int(time.time()) - 86400) == 3
+
+
+def test_seed_does_not_hold_write_lock_between_pages(tmp_path):
+    import sqlite3
+    db = tmp_path / "t.db"
+
+    class Other(FakeLadder):
+        def league_entries(self, platform, tier, div, page):
+            # Another region's collector writing between our API calls must not wait.
+            o = sqlite3.connect(db, timeout=0.1)
+            o.execute("INSERT OR IGNORE INTO players(puuid, platform, tier) VALUES (?,?,?)",
+                      (f"o{div}{page}", "kr", "EMERALD"))
+            o.commit()
+            o.close()
+            if page > 2:
+                return []
+            return [{"puuid": f"y{div}{page}", "rank": div, "leaguePoints": 1, "wins": 1, "losses": 1}]
+
+    con = connect(db)
+    assert collect.seed_players(Other(), con, "na1", ["MASTER", "EMERALD"]) == 9
